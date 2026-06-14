@@ -31,9 +31,10 @@
 
 **1. 建立工作空間並獲取程式碼**
 ```bash
-mkdir -p ~/cyivs_robot_ws/src
-cd ~/cyivs_robot_ws/src
-git clone [https://github.com/a605042000/cyivs_robot.git](https://github.com/a605042000/cyivs_robot.git) .
+mkdir -p ~/cyivs_robot_ws
+cd ~/cyivs_robot_ws
+sudo apt install git
+git clone https://github.com/a605042000/cyivs_robot.git src
 ```
 
 **2. 安裝相依套件 (Dependencies)**
