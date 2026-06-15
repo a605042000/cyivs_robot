@@ -57,6 +57,7 @@ class RelativeMoveController(Node):
 		self.declare_parameter('imu_topic', '/imu')
 		self.declare_parameter('use_imu_yaw', True)
 		self.declare_parameter('imu_yaw_filter_alpha', 0.25)
+		self.declare_parameter('imu_rotation_scale', 1.0)
 
 		self.declare_parameter('control_frequency', 50.0)
 		self.declare_parameter('max_linear_speed', 0.25)
@@ -80,6 +81,7 @@ class RelativeMoveController(Node):
 		self.control_frequency = float(self.get_parameter('control_frequency').value)
 		self.use_imu_yaw = bool(self.get_parameter('use_imu_yaw').value)
 		self.imu_yaw_filter_alpha = clamp(float(self.get_parameter('imu_yaw_filter_alpha').value), 0.0, 1.0)
+		self.imu_rotation_scale = float(self.get_parameter('imu_rotation_scale').value)
 		self.max_linear_speed = float(self.get_parameter('max_linear_speed').value)
 		self.max_angular_speed = float(self.get_parameter('max_angular_speed').value)
 		self.linear_kp = float(self.get_parameter('linear_kp').value)
@@ -190,6 +192,7 @@ class RelativeMoveController(Node):
 		dx = float(msg.x)
 		dy = float(msg.y)
 		dz = float(msg.z)
+		effective_dz = dz * self.imu_rotation_scale if self.use_imu_yaw else dz
 
 		is_pure_x = abs(dx) > self.position_tolerance and abs(dy) <= self.position_tolerance
 		is_pure_y = abs(dy) > self.position_tolerance and abs(dx) <= self.position_tolerance
@@ -203,7 +206,7 @@ class RelativeMoveController(Node):
 
 		self.target_x = self.current_x + world_dx
 		self.target_y = self.current_y + world_dy
-		self.final_yaw = normalize_angle(self.start_yaw + dz)
+		self.final_yaw = normalize_angle(self.start_yaw + effective_dz)
 
 		distance = math.hypot(world_dx, world_dy)
 
@@ -227,6 +230,7 @@ class RelativeMoveController(Node):
 
 		self.get_logger().info(
 			f'New goal: dx={dx:.3f}, dy={dy:.3f}, dz={dz:.3f} -> '
+			f'effective_dz={effective_dz:.3f}, '
 			f'target=({self.target_x:.3f}, {self.target_y:.3f}), final_yaw={self.final_yaw:.3f}'
 		)
 
