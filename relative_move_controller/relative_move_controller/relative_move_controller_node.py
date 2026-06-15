@@ -8,6 +8,7 @@ from geometry_msgs.msg import Twist, Vector3
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import Imu
 
 
 def clamp(value: float, min_value: float, max_value: float) -> float:
@@ -53,14 +54,19 @@ class RelativeMoveController(Node):
 		self.declare_parameter('cmd_vel_topic', '/cmd_vel')
 		self.declare_parameter('move_topic', '/move')
 		self.declare_parameter('odom_topic', '/odom')
+		self.declare_parameter('imu_topic', '/imu')
+		self.declare_parameter('use_imu_yaw', True)
+		self.declare_parameter('imu_yaw_filter_alpha', 0.25)
 
 		self.declare_parameter('control_frequency', 50.0)
 		self.declare_parameter('max_linear_speed', 0.25)
 		self.declare_parameter('max_angular_speed', 1.0)
 		self.declare_parameter('linear_kp', 0.9)
-		self.declare_parameter('angular_kp', 1.8)
+		self.declare_parameter('angular_kp', 1.2)
 		self.declare_parameter('position_tolerance', 0.01)
 		self.declare_parameter('yaw_tolerance', 0.02)
+		self.declare_parameter('cross_track_kp', 2.0)
+		self.declare_parameter('max_heading_correction', 0.35)
 		self.declare_parameter('max_linear_accel', 0.20)
 		self.declare_parameter('max_linear_decel', 0.35)
 		self.declare_parameter('max_angular_accel', 1.2)
@@ -69,14 +75,19 @@ class RelativeMoveController(Node):
 		cmd_vel_topic = self.get_parameter('cmd_vel_topic').value
 		move_topic = self.get_parameter('move_topic').value
 		odom_topic = self.get_parameter('odom_topic').value
+		imu_topic = self.get_parameter('imu_topic').value
 
 		self.control_frequency = float(self.get_parameter('control_frequency').value)
+		self.use_imu_yaw = bool(self.get_parameter('use_imu_yaw').value)
+		self.imu_yaw_filter_alpha = clamp(float(self.get_parameter('imu_yaw_filter_alpha').value), 0.0, 1.0)
 		self.max_linear_speed = float(self.get_parameter('max_linear_speed').value)
 		self.max_angular_speed = float(self.get_parameter('max_angular_speed').value)
 		self.linear_kp = float(self.get_parameter('linear_kp').value)
 		self.angular_kp = float(self.get_parameter('angular_kp').value)
 		self.position_tolerance = float(self.get_parameter('position_tolerance').value)
 		self.yaw_tolerance = float(self.get_parameter('yaw_tolerance').value)
+		self.cross_track_kp = float(self.get_parameter('cross_track_kp').value)
+		self.max_heading_correction = float(self.get_parameter('max_heading_correction').value)
 		self.max_linear_accel = float(self.get_parameter('max_linear_accel').value)
 		self.max_linear_decel = float(self.get_parameter('max_linear_decel').value)
 		self.max_angular_accel = float(self.get_parameter('max_angular_accel').value)
@@ -90,6 +101,12 @@ class RelativeMoveController(Node):
 			self.odom_callback,
 			qos_profile_sensor_data,
 		)
+		self.imu_sub = self.create_subscription(
+			Imu,
+			imu_topic,
+			self.imu_callback,
+			qos_profile_sensor_data,
+		)
 
 		timer_period = 1.0 / self.control_frequency
 		self.control_dt = timer_period
@@ -97,7 +114,8 @@ class RelativeMoveController(Node):
 
 		self.current_x: Optional[float] = None
 		self.current_y: Optional[float] = None
-		self.current_yaw: Optional[float] = None
+		self.current_odom_yaw: Optional[float] = None
+		self.current_imu_yaw: Optional[float] = None
 
 		self.state = MotionState.IDLE
 		self.start_yaw = 0.0
@@ -105,12 +123,22 @@ class RelativeMoveController(Node):
 		self.final_yaw = 0.0
 		self.target_x = 0.0
 		self.target_y = 0.0
+		self.translate_heading_yaw = 0.0
+		self.line_start_x = 0.0
+		self.line_start_y = 0.0
+		self.line_dir_x = 1.0
+		self.line_dir_y = 0.0
 		self.skip_rotate_to_path = False
 		self.prefer_reverse = False
 		self.current_cmd_linear_x = 0.0
 		self.current_cmd_angular_z = 0.0
 
 		self.get_logger().info('relative_move_controller started. Waiting for /move commands.')
+
+	def get_current_yaw(self) -> Optional[float]:
+		if self.use_imu_yaw and self.current_imu_yaw is not None:
+			return self.current_imu_yaw
+		return self.current_odom_yaw
 
 	def publish_cmd_with_rate_limit(self, target_cmd: Twist) -> None:
 		limited_cmd = Twist()
@@ -137,10 +165,25 @@ class RelativeMoveController(Node):
 		self.current_y = msg.pose.pose.position.y
 
 		q = msg.pose.pose.orientation
-		self.current_yaw = yaw_from_quaternion(q.x, q.y, q.z, q.w)
+		self.current_odom_yaw = yaw_from_quaternion(q.x, q.y, q.z, q.w)
+
+	def imu_callback(self, msg: Imu) -> None:
+		q = msg.orientation
+		if abs(q.w) < 1e-9 and abs(q.x) < 1e-9 and abs(q.y) < 1e-9 and abs(q.z) < 1e-9:
+			return
+		raw_yaw = yaw_from_quaternion(q.x, q.y, q.z, q.w)
+		if self.current_imu_yaw is None:
+			self.current_imu_yaw = raw_yaw
+			return
+		delta = normalize_angle(raw_yaw - self.current_imu_yaw)
+		self.current_imu_yaw = normalize_angle(self.current_imu_yaw + self.imu_yaw_filter_alpha * delta)
+
+	def compute_rotation_cmd(self, yaw_error: float) -> float:
+		return clamp(self.angular_kp * yaw_error, -self.max_angular_speed, self.max_angular_speed)
 
 	def move_callback(self, msg: Vector3) -> None:
-		if self.current_x is None or self.current_y is None or self.current_yaw is None:
+		current_yaw = self.get_current_yaw()
+		if self.current_x is None or self.current_y is None or current_yaw is None:
 			self.get_logger().warn('Ignoring /move command because /odom is not ready yet.')
 			return
 
@@ -153,7 +196,7 @@ class RelativeMoveController(Node):
 		self.skip_rotate_to_path = is_pure_x or is_pure_y
 		self.prefer_reverse = is_pure_x and dx < 0.0
 
-		self.start_yaw = self.current_yaw
+		self.start_yaw = current_yaw
 
 		world_dx = math.cos(self.start_yaw) * dx - math.sin(self.start_yaw) * dy
 		world_dy = math.sin(self.start_yaw) * dx + math.cos(self.start_yaw) * dy
@@ -166,8 +209,18 @@ class RelativeMoveController(Node):
 
 		if distance > self.position_tolerance and not self.skip_rotate_to_path:
 			self.rotate_to_path_yaw = math.atan2(self.target_y - self.current_y, self.target_x - self.current_x)
+			self.translate_heading_yaw = self.rotate_to_path_yaw
+			self.line_start_x = self.current_x
+			self.line_start_y = self.current_y
+			self.line_dir_x = math.cos(self.translate_heading_yaw)
+			self.line_dir_y = math.sin(self.translate_heading_yaw)
 			self.state = MotionState.ROTATE_TO_PATH
 		elif distance > self.position_tolerance:
+			self.translate_heading_yaw = math.atan2(world_dy, world_dx)
+			self.line_start_x = self.current_x
+			self.line_start_y = self.current_y
+			self.line_dir_x = math.cos(self.translate_heading_yaw)
+			self.line_dir_y = math.sin(self.translate_heading_yaw)
 			self.state = MotionState.TRANSLATE
 		else:
 			self.state = MotionState.FINAL_ROTATE
@@ -178,7 +231,8 @@ class RelativeMoveController(Node):
 		)
 
 	def control_loop(self) -> None:
-		if self.current_x is None or self.current_y is None or self.current_yaw is None:
+		current_yaw = self.get_current_yaw()
+		if self.current_x is None or self.current_y is None or current_yaw is None:
 			return
 
 		if self.state == MotionState.IDLE:
@@ -189,15 +243,11 @@ class RelativeMoveController(Node):
 		cmd = Twist()
 
 		if self.state == MotionState.ROTATE_TO_PATH:
-			yaw_error = normalize_angle(self.rotate_to_path_yaw - self.current_yaw)
+			yaw_error = normalize_angle(self.rotate_to_path_yaw - current_yaw)
 			if abs(yaw_error) <= self.yaw_tolerance:
 				self.state = MotionState.TRANSLATE
 			else:
-				cmd.angular.z = clamp(
-					self.angular_kp * yaw_error,
-					-self.max_angular_speed,
-					self.max_angular_speed,
-				)
+				cmd.angular.z = self.compute_rotation_cmd(yaw_error)
 				self.publish_cmd_with_rate_limit(cmd)
 				return
 
@@ -209,12 +259,18 @@ class RelativeMoveController(Node):
 			if distance <= self.position_tolerance:
 				self.state = MotionState.FINAL_ROTATE
 			else:
-				path_yaw = math.atan2(dy, dx)
-				heading_error = normalize_angle(path_yaw - self.current_yaw)
+				heading_target = self.translate_heading_yaw
+				cross_track_error = -self.line_dir_y * (self.current_x - self.line_start_x) + self.line_dir_x * (self.current_y - self.line_start_y)
+				heading_correction = clamp(
+					-self.cross_track_kp * cross_track_error,
+					-self.max_heading_correction,
+					self.max_heading_correction,
+				)
+				heading_error = normalize_angle(heading_target + heading_correction - current_yaw)
 				linear_direction = 1.0
 
 				if self.prefer_reverse:
-					reverse_heading_error = normalize_angle(path_yaw + math.pi - self.current_yaw)
+					reverse_heading_error = normalize_angle(heading_target + math.pi - current_yaw)
 					if abs(reverse_heading_error) < abs(heading_error):
 						heading_error = reverse_heading_error
 						linear_direction = -1.0
@@ -236,7 +292,7 @@ class RelativeMoveController(Node):
 				return
 
 		if self.state == MotionState.FINAL_ROTATE:
-			yaw_error = normalize_angle(self.final_yaw - self.current_yaw)
+			yaw_error = normalize_angle(self.final_yaw - current_yaw)
 			if abs(yaw_error) <= self.yaw_tolerance:
 				self.state = MotionState.IDLE
 				self.current_cmd_linear_x = 0.0
@@ -245,11 +301,7 @@ class RelativeMoveController(Node):
 				self.get_logger().info('Relative move goal completed.')
 				return
 
-			cmd.angular.z = clamp(
-				self.angular_kp * yaw_error,
-				-self.max_angular_speed,
-				self.max_angular_speed,
-			)
+			cmd.angular.z = self.compute_rotation_cmd(yaw_error)
 			self.publish_cmd_with_rate_limit(cmd)
 
 
