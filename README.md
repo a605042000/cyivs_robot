@@ -38,8 +38,9 @@ git clone https://github.com/a605042000/cyivs_robot.git src
 ```
 
 **2. 安裝相依套件 (Dependencies)**
-使用 `rosdep` 自動安裝此專案所需的所有依賴項：
+使用 `rosdep` 自動安裝此專案所需的所有依賴項。如果您是第一次在這台電腦上設定 ROS 環境，請先進行初始化：
 ```bash
+sudo rosdep init
 cd ~/cyivs_robot_ws
 sudo apt update
 rosdep update
