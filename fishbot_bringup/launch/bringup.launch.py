@@ -27,7 +27,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    ros_serial2wifi =  launch_ros.actions.Node(
+    ros_serail2wifi =  launch_ros.actions.Node(
         package='ros_serial2wifi',
         executable='tcp_server',
         parameters=[{'serial_port': '/tmp/tty_laser'}],
@@ -45,6 +45,6 @@ def generate_launch_description():
         urdf2tf,
         odom2tf,
         microros_agent,
-        ros_serial2wifi,
+        ros_serail2wifi,
         ydlidar_delay
     ])
