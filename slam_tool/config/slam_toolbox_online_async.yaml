@@ -7,6 +7,9 @@ slam_toolbox:
     use_map_saver: true
     mode: mapping
 
+    # 【核心修改】將地圖解析度改為 0.01 公尺（1公分一格）
+    resolution: 0.01
+
     # Match YDLIDAR hardware limits and avoid invalid near-field data.
     min_laser_range: 0.2
     max_laser_range: 20.0
