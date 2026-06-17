@@ -27,6 +27,7 @@
 #include <vector>
 #include <iostream>
 #include <string>
+#include <limits>
 #include <signal.h>
 
 #define ROS2Verision "1.0.1"
@@ -196,8 +197,8 @@ int main(int argc, char *argv[]) {
       auto scan_msg = std::make_shared<sensor_msgs::msg::LaserScan>();
       auto pc_msg = std::make_shared<sensor_msgs::msg::PointCloud>();
 
-      scan_msg->header.stamp.sec = RCL_NS_TO_S(scan.stamp);
-      scan_msg->header.stamp.nanosec =  scan.stamp - RCL_S_TO_NS(scan_msg->header.stamp.sec);
+      // Use ROS time to keep scan timestamps aligned with TF lookup times.
+      scan_msg->header.stamp = node->get_clock()->now();
       scan_msg->header.frame_id = frame_id;
       pc_msg->header = scan_msg->header;
       scan_msg->angle_min = scan.config.min_angle;
@@ -208,9 +209,12 @@ int main(int argc, char *argv[]) {
       scan_msg->range_min = scan.config.min_range;
       scan_msg->range_max = scan.config.max_range;
       
-      int size = (scan.config.max_angle - scan.config.min_angle)/ scan.config.angle_increment + 1;
-      scan_msg->ranges.resize(size);
-      scan_msg->intensities.resize(size);
+      const int size = static_cast<int>(std::round(
+        (scan_msg->angle_max - scan_msg->angle_min) / scan_msg->angle_increment)) + 1;
+      const float invalid_range = invalid_range_is_inf ?
+        std::numeric_limits<float>::infinity() : (scan_msg->range_max + 1.0f);
+      scan_msg->ranges.assign(size, invalid_range);
+      scan_msg->intensities.assign(size, 0.0f);
 
       pc_msg->channels.resize(2);
       int idx_intensity = 0;
@@ -219,7 +223,8 @@ int main(int argc, char *argv[]) {
       pc_msg->channels[idx_timestamp].name = "stamps";
 
       for(size_t i=0; i < scan.points.size(); i++) {
-        int index = std::ceil((scan.points[i].angle - scan.config.min_angle)/scan.config.angle_increment);
+        const int index = static_cast<int>(std::lround(
+          (scan.points[i].angle - scan_msg->angle_min) / scan_msg->angle_increment));
         if(index >=0 && index < size) {
 	  if (scan.points[i].range >= scan.config.min_range) {
             scan_msg->ranges[index] = scan.points[i].range;

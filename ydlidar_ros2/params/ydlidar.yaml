@@ -6,10 +6,10 @@ ydlidar_node:
     baudrate: 115200 # 波特率
     lidar_type: 1 # 激光雷达类型
     device_type: 0 # 设备类型
-    sample_rate: 3 # 采样率
+    sample_rate: 4 # 【修改】調高採樣率（通常支援4或更高，依型號而定，例如X4/X2L建議4）
     intensity_bit: 8 # 强度位数
     abnormal_check_count: 4 # 异常检查计数
-    fixed_resolution: false # 固定分辨率
+    fixed_resolution: true # 固定分辨率，避免每幀點數波動導致 SLAM 讀取長度不一致
     reversion: true # 反转
     inverted: true # 倒置
     auto_reconnect: true # 自动重连
@@ -19,6 +19,6 @@ ydlidar_node:
     angle_max: 180.0 # 最大角度
     angle_min: -180.0 # 最小角度
     range_max: 64.0 # 最大范围
-    range_min: 0.05 # 最小范围
-    frequency: 5.0 # 频率
-    invalid_range_is_inf: false # 无效范围为无穷大
+    range_min: 0.15 # 【修改】修正為0.15m，配合你Lidar的物理盲區(0.1m)，避免0.05m造成的噪點
+    frequency: 6.0 # Lower scan rate to reduce slam_toolbox message filter queue pressure on Raspberry Pi.
+    invalid_range_is_inf: true # 【重要修改】無效範圍設為無窮大(inf)，確保每一幀的點數絕對固定！
